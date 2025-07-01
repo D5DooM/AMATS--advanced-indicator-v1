@@ -1,0 +1,340 @@
+//@version=5
+indicator('Advanced Multi-Algorithm Trading System', shorttitle = 'AMATS', overlay = false, max_boxes_count = 500, max_lines_count = 500)
+
+// ==================== INPUT PARAMETERS ====================
+// Market Regime Detection
+regime_period = input.int(50, 'Regime Detection Period', minval = 10, maxval = 200)
+volatility_threshold = input.float(0.02, 'Volatility Threshold', minval = 0.005, maxval = 0.1, step = 0.005)
+
+// Algorithm Weights (sum should equal 100)
+weight1 = input.float(12.0, 'Algo 1: Adaptive Momentum Weight', minval = 0, maxval = 50)
+weight2 = input.float(11.0, 'Algo 2: Multi-Timeframe RSI Weight', minval = 0, maxval = 50)
+weight3 = input.float(10.0, 'Algo 3: MACD Confluence Weight', minval = 0, maxval = 50)
+weight4 = input.float(13.0, 'Algo 4: Volume Profile Weight', minval = 0, maxval = 50)
+weight5 = input.float(9.0, 'Algo 5: Bollinger Band Squeeze Weight', minval = 0, maxval = 50)
+weight6 = input.float(11.0, 'Algo 6: Market Structure Weight', minval = 0, maxval = 50)
+weight7 = input.float(12.0, 'Algo 7: Statistical Arbitrage Weight', minval = 0, maxval = 50)
+weight8 = input.float(10.0, 'Algo 8: Sentiment Oscillator Weight', minval = 0, maxval = 50)
+weight9 = input.float(12.0, 'Algo 9: ML-Based Pattern Weight', minval = 0, maxval = 50)
+
+// Sensitivity Settings
+sensitivity = input.string('High', 'Overall Sensitivity', options = ['Low', 'Medium', 'High'])
+adaptive_mode = input.bool(true, 'Enable Adaptive Mode')
+
+// ==================== MARKET REGIME DETECTION ====================
+atr_current = ta.atr(14)
+atr_avg = ta.sma(atr_current, regime_period)
+volatility_regime = atr_current > atr_avg * (1 + volatility_threshold) ? 1 : atr_current < atr_avg * (1 - volatility_threshold) ? -1 : 0
+
+// Trend Regime
+ema_fast = ta.ema(close, 12)
+ema_slow = ta.ema(close, 26)
+trend_regime = ema_fast > ema_slow ? 1 : -1
+
+// Volume Regime
+volume_avg = ta.sma(volume, regime_period)
+volume_regime = volume > volume_avg * 1.2 ? 1 : volume < volume_avg * 0.8 ? -1 : 0
+
+// ==================== ALGORITHM 1: ADAPTIVE MOMENTUM ====================
+// Dynamic momentum calculation with regime adaptation
+mom_short = input.int(10, 'Momentum Short Period', minval = 5, maxval = 50)
+mom_long = input.int(30, 'Momentum Long Period', minval = 20, maxval = 100)
+
+adaptive_short = volatility_regime == 1 ? math.round(mom_short * 0.7) : volatility_regime == -1 ? math.round(mom_short * 1.3) : mom_short
+adaptive_long = volatility_regime == 1 ? math.round(mom_long * 0.7) : volatility_regime == -1 ? math.round(mom_long * 1.3) : mom_long
+
+momentum_short = ta.mom(close, adaptive_short)
+momentum_long = ta.mom(close, adaptive_long)
+momentum_ratio = momentum_short / momentum_long
+
+// Normalize to 0-1 scale
+momentum_signal = math.max(0, math.min(1, (momentum_ratio + 1) / 2))
+
+// ==================== ALGORITHM 2: MULTI-TIMEFRAME RSI ====================
+rsi_14 = ta.rsi(close, 14)
+rsi_21 = ta.rsi(close, 21)
+rsi_50 = ta.rsi(close, 50)
+
+// HTF approximation using higher period RSI
+rsi_htf = ta.rsi(close, 70)
+
+// Composite RSI with timeframe weighting
+composite_rsi = rsi_14 * 0.4 + rsi_21 * 0.3 + rsi_50 * 0.2 + rsi_htf * 0.1
+
+// RSI divergence detection
+rsi_bull_div = ta.lowest(low, 5) == low and ta.lowest(rsi_14, 5) != rsi_14 and rsi_14 < 35
+rsi_bear_div = ta.highest(high, 5) == high and ta.highest(rsi_14, 5) != rsi_14 and rsi_14 > 65
+
+rsi_signal = composite_rsi / 100
+rsi_signal := rsi_bull_div ? math.min(rsi_signal + 0.2, 1) : rsi_bear_div ? math.max(rsi_signal - 0.2, 0) : rsi_signal
+
+// ==================== ALGORITHM 3: MACD CONFLUENCE ====================
+[macd_line, signal_line, histogram] = ta.macd(close, 12, 26, 9)
+[macd_fast, signal_fast, hist_fast] = ta.macd(close, 8, 17, 9)
+[macd_slow, signal_slow, hist_slow] = ta.macd(close, 19, 39, 9)
+
+// MACD alignment score
+macd_bull_alignment = (macd_line > signal_line ? 1 : 0) + (macd_fast > signal_fast ? 1 : 0) + (macd_slow > signal_slow ? 1 : 0)
+macd_bear_alignment = (macd_line < signal_line ? 1 : 0) + (macd_fast < signal_fast ? 1 : 0) + (macd_slow < signal_slow ? 1 : 0)
+
+// Histogram momentum
+hist_momentum = histogram > histogram[1] and histogram[1] > histogram[2] ? 1 : histogram < histogram[1] and histogram[1] < histogram[2] ? -1 : 0
+
+macd_signal = (macd_bull_alignment - macd_bear_alignment) / 6 + 0.5
+macd_signal := hist_momentum == 1 ? math.min(macd_signal + 0.15, 1) : hist_momentum == -1 ? math.max(macd_signal - 0.15, 0) : macd_signal
+
+// ==================== ALGORITHM 4: VOLUME PROFILE ANALYSIS ====================
+// Volume-weighted price analysis
+vwap = ta.vwap
+price_vs_vwap = (close - vwap) / vwap
+
+// Volume momentum
+vol_ma_20 = ta.sma(volume, 20)
+vol_momentum = (volume - vol_ma_20) / vol_ma_20
+
+// Price-volume confirmation
+pv_confirmation = price_vs_vwap * vol_momentum
+
+// On-balance volume trend
+obv = ta.obv
+obv_ma_20 = ta.sma(obv, 20)
+obv_trend = (obv - obv_ma_20) / obv_ma_20
+
+volume_signal = math.max(0, math.min(1, (pv_confirmation + obv_trend) / 2 + 0.5))
+
+// ==================== ALGORITHM 5: BOLLINGER BAND SQUEEZE ====================
+bb_length = 20
+bb_mult = 2.0
+bb_basis = ta.sma(close, bb_length)
+bb_dev = bb_mult * ta.stdev(close, bb_length)
+bb_upper = bb_basis + bb_dev
+bb_lower = bb_basis - bb_dev
+
+// Keltner Channels for squeeze detection
+kc_length = 20
+kc_mult = 1.5
+kc_ma = ta.ema(close, kc_length)
+kc_range = kc_mult * ta.atr(kc_length)
+kc_upper = kc_ma + kc_range
+kc_lower = kc_ma - kc_range
+
+// Squeeze condition
+squeeze = bb_lower > kc_lower and bb_upper < kc_upper
+no_squeeze = bb_lower < kc_lower or bb_upper > kc_upper
+
+// Momentum oscillator
+mom = ta.linreg(close - math.avg(math.avg(ta.highest(high, kc_length), ta.lowest(low, kc_length)), ta.sma(close, kc_length)), kc_length, 0)
+
+bb_signal = no_squeeze and mom > 0 ? 0.75 : no_squeeze and mom < 0 ? 0.25 : squeeze ? 0.5 : (close - bb_lower) / (bb_upper - bb_lower)
+
+// ==================== ALGORITHM 6: MARKET STRUCTURE ANALYSIS ====================
+// Higher highs, higher lows detection
+hh = high > ta.highest(high[1], 10)
+hl = low > ta.lowest(low[1], 10)
+lh = high < ta.highest(high[1], 10)
+ll = low < ta.lowest(low[1], 10)
+
+// Structure score
+structure_bull = hh and hl ? 2 : hh or hl ? 1 : 0
+structure_bear = lh and ll ? 2 : lh or ll ? 1 : 0
+
+// Support/Resistance breaks
+pivot_high = ta.pivothigh(high, 5, 5)
+pivot_low = ta.pivotlow(low, 5, 5)
+
+var float last_pivot_high = na
+var float last_pivot_low = na
+
+if not na(pivot_high)
+    last_pivot_high := pivot_high
+    last_pivot_high
+if not na(pivot_low)
+    last_pivot_low := pivot_low
+    last_pivot_low
+
+resistance_break = not na(last_pivot_high) and close > last_pivot_high
+support_break = not na(last_pivot_low) and close < last_pivot_low
+
+structure_signal = (structure_bull - structure_bear) / 4 + 0.5
+structure_signal := resistance_break ? math.min(structure_signal + 0.2, 1) : support_break ? math.max(structure_signal - 0.2, 0) : structure_signal
+
+// ==================== ALGORITHM 7: STATISTICAL ARBITRAGE ====================
+// Define SMA for statistical arbitrage
+sma_20 = ta.sma(close, 20)
+
+// Mean reversion vs trend following
+price_zscore = (close - ta.sma(close, 50)) / ta.stdev(close, 50)
+mean_reversion_signal = -price_zscore / 3 // Inverted for mean reversion
+
+// Trend strength using ADX calculation
+adx_period = 14
+tr1 = math.max(high - low, math.abs(high - close[1]))
+tr = math.max(tr1, math.abs(low - close[1]))
+atr_adx = ta.rma(tr, adx_period)
+
+up_move = high - high[1]
+down_move = low[1] - low
+plus_dm = up_move > down_move and up_move > 0 ? up_move : 0
+minus_dm = down_move > up_move and down_move > 0 ? down_move : 0
+
+plus_di = 100 * ta.rma(plus_dm, adx_period) / atr_adx
+minus_di = 100 * ta.rma(minus_dm, adx_period) / atr_adx
+dx = math.abs(plus_di - minus_di) / (plus_di + minus_di) * 100
+adx = ta.rma(dx, adx_period)
+
+trend_strength = adx / 100
+
+// Combine mean reversion and trend following based on market regime
+stat_arb_signal = trend_strength > 0.25 ? close > sma_20 ? 0.7 : 0.3 : math.max(0, math.min(1, 0.5 - mean_reversion_signal * 0.2))
+
+// ==================== ALGORITHM 8: SENTIMENT OSCILLATOR ====================
+// Fear & Greed approximation using multiple indicators
+sma_atr_50 = ta.sma(atr_current, 50)
+fear_greed_rsi = 100 - rsi_14 // Inverted RSI
+fear_greed_vix = atr_current / sma_atr_50 * 50 // VIX approximation
+fear_greed_mom = ta.mom(close, 14) / close * 1000 + 50 // Momentum component
+
+sentiment_composite = (fear_greed_rsi + fear_greed_vix + fear_greed_mom) / 3
+
+// Contrarian signal (buy fear, sell greed)
+sentiment_signal = sentiment_composite < 30 ? 0.8 : sentiment_composite > 70 ? 0.2 : sentiment_composite / 100
+
+// ==================== ALGORITHM 9: ML-BASED PATTERN RECOGNITION ====================
+// Simplified neural network approach using price patterns
+// Pattern 1: Doji recognition
+doji_size = math.abs(close - open)
+doji_threshold = (high - low) * 0.1
+is_doji = doji_size <= doji_threshold
+
+// Pattern 2: Engulfing patterns
+bullish_engulfing = close > open and close[1] < open[1] and close > open[1] and open < close[1]
+bearish_engulfing = close < open and close[1] > open[1] and close < open[1] and open > close[1]
+
+// Pattern 3: Inside/Outside bars
+inside_bar = high < high[1] and low > low[1]
+outside_bar = high > high[1] and low < low[1]
+
+// Neural network weights (simplified)
+w1 = 0.3
+w2 = 0.25
+w3 = 0.2
+w4 = 0.15
+w5 = 0.1
+
+// Activation function (sigmoid approximation)
+sigmoid(x) =>
+    1 / (1 + math.exp(-x))
+
+// Feature extraction
+f1 = (close - open) / (high - low) // Body ratio
+f2 = (high - math.max(close, open)) / (high - low) // Upper shadow ratio
+f3 = (math.min(close, open) - low) / (high - low) // Lower shadow ratio
+f4 = ta.roc(close, 5) / 100 // Rate of change
+// Volume ratio for ML
+vol_ma_ml = ta.sma(volume, 20)
+f5 = volume / vol_ma_ml // Volume ratio
+
+// Neural network output
+nn_input = f1 * w1 + f2 * w2 + f3 * w3 + f4 * w4 + f5 * w5
+ml_signal = sigmoid(nn_input)
+
+// Pattern adjustments
+ml_signal := bullish_engulfing ? math.min(ml_signal + 0.2, 1) : bearish_engulfing ? math.max(ml_signal - 0.2, 0) : ml_signal
+
+// ==================== SIGNAL AGGREGATION ====================
+// Normalize weights to sum to 100
+total_weight = weight1 + weight2 + weight3 + weight4 + weight5 + weight6 + weight7 + weight8 + weight9
+w1_norm = weight1 / total_weight
+w2_norm = weight2 / total_weight
+w3_norm = weight3 / total_weight
+w4_norm = weight4 / total_weight
+w5_norm = weight5 / total_weight
+w6_norm = weight6 / total_weight
+w7_norm = weight7 / total_weight
+w8_norm = weight8 / total_weight
+w9_norm = weight9 / total_weight
+
+// Weighted composite signal
+composite_signal = momentum_signal * w1_norm + rsi_signal * w2_norm + macd_signal * w3_norm + volume_signal * w4_norm + bb_signal * w5_norm + structure_signal * w6_norm + stat_arb_signal * w7_norm + sentiment_signal * w8_norm + ml_signal * w9_norm
+
+// Adaptive adjustment based on market regime
+regime_multiplier = volatility_regime == 1 ? 0.8 : volatility_regime == -1 ? 1.2 : 1.0
+final_signal = composite_signal * regime_multiplier
+
+// Sensitivity adjustment
+sensitivity_mult = sensitivity == 'High' ? 1.2 : sensitivity == 'Medium' ? 1.0 : 0.8
+adjusted_signal = math.max(0, math.min(1, final_signal * sensitivity_mult))
+
+// Convert to 0-9 scale
+signal_0_9 = math.round(adjusted_signal * 9)
+
+// ==================== SIGNAL INTERPRETATION ====================
+signal_text = signal_0_9 >= 7 ? 'STRONG LONG' : signal_0_9 >= 5 ? 'LONG' : signal_0_9 >= 4 ? 'WEAK LONG' : signal_0_9 == 3 ? 'NEUTRAL' : signal_0_9 >= 2 ? 'WEAK SHORT' : signal_0_9 >= 1 ? 'SHORT' : 'STRONG SHORT'
+
+// ==================== PLOTTING ====================
+// Main signal plot
+plot(signal_0_9, title = 'Signal Strength (0-9)', color = color.new(signal_0_9 >= 5 ? #00ff00 : signal_0_9 <= 3 ? #ff0000 : #ffff00, 20), linewidth = 3)
+
+// Individual algorithm plots (normalized to 0-9 scale)
+plot(momentum_signal * 9, title = 'Algo 1: Momentum', color = color.new(#0000ff, 70), linewidth = 1)
+plot(rsi_signal * 9, title = 'Algo 2: RSI', color = color.new(#800080, 70), linewidth = 1)
+plot(macd_signal * 9, title = 'Algo 3: MACD', color = color.new(#ffa500, 70), linewidth = 1)
+plot(volume_signal * 9, title = 'Algo 4: Volume', color = color.new(#00ffff, 70), linewidth = 1)
+plot(bb_signal * 9, title = 'Algo 5: BB Squeeze', color = color.new(#ffc0cb, 70), linewidth = 1)
+plot(structure_signal * 9, title = 'Algo 6: Structure', color = color.new(#00ff00, 70), linewidth = 1)
+plot(stat_arb_signal * 9, title = 'Algo 7: Stat Arb', color = color.new(#008080, 70), linewidth = 1)
+plot(sentiment_signal * 9, title = 'Algo 8: Sentiment', color = color.new(#800000, 70), linewidth = 1)
+plot(ml_signal * 9, title = 'Algo 9: ML Pattern', color = color.new(#000080, 70), linewidth = 1)
+
+// Reference lines
+hline(4.5, 'Neutral Line', color = #808080, linestyle = hline.style_dashed)
+hline(7, 'Strong Long', color = #00ff00, linestyle = hline.style_dotted)
+hline(2, 'Strong Short', color = #ff0000, linestyle = hline.style_dotted)
+
+// ==================== TABLE DISPLAY ====================
+if barstate.islast
+    var table info_table = table.new(position.top_right, 2, 12, bgcolor = #ffffff, border_width = 1)
+
+    table.cell(info_table, 0, 0, 'Signal Strength', text_color = #000000, text_size = size.small)
+    table.cell(info_table, 1, 0, str.tostring(signal_0_9) + '/9 - ' + signal_text, text_color = signal_0_9 >= 5 ? #00ff00 : signal_0_9 <= 3 ? #ff0000 : #ffaa00, text_size = size.small)
+
+    table.cell(info_table, 0, 1, 'Market Regime', text_color = #000000, text_size = size.tiny)
+    table.cell(info_table, 1, 1, volatility_regime == 1 ? 'High Vol' : volatility_regime == -1 ? 'Low Vol' : 'Normal', text_color = #000000, text_size = size.tiny)
+
+    table.cell(info_table, 0, 2, 'Algo 1: Momentum', text_color = #000000, text_size = size.tiny)
+    table.cell(info_table, 1, 2, str.tostring(math.round(momentum_signal * 9, 1)), text_color = #0000ff, text_size = size.tiny)
+
+    table.cell(info_table, 0, 3, 'Algo 2: RSI', text_color = #000000, text_size = size.tiny)
+    table.cell(info_table, 1, 3, str.tostring(math.round(rsi_signal * 9, 1)), text_color = #800080, text_size = size.tiny)
+
+    table.cell(info_table, 0, 4, 'Algo 3: MACD', text_color = #000000, text_size = size.tiny)
+    table.cell(info_table, 1, 4, str.tostring(math.round(macd_signal * 9, 1)), text_color = #ffa500, text_size = size.tiny)
+
+    table.cell(info_table, 0, 5, 'Algo 4: Volume', text_color = #000000, text_size = size.tiny)
+    table.cell(info_table, 1, 5, str.tostring(math.round(volume_signal * 9, 1)), text_color = #00ffff, text_size = size.tiny)
+
+    table.cell(info_table, 0, 6, 'Algo 5: BB Squeeze', text_color = #000000, text_size = size.tiny)
+    table.cell(info_table, 1, 6, str.tostring(math.round(bb_signal * 9, 1)), text_color = #ffc0cb, text_size = size.tiny)
+
+    table.cell(info_table, 0, 7, 'Algo 6: Structure', text_color = #000000, text_size = size.tiny)
+    table.cell(info_table, 1, 7, str.tostring(math.round(structure_signal * 9, 1)), text_color = #00ff00, text_size = size.tiny)
+
+    table.cell(info_table, 0, 8, 'Algo 7: Stat Arb', text_color = #000000, text_size = size.tiny)
+    table.cell(info_table, 1, 8, str.tostring(math.round(stat_arb_signal * 9, 1)), text_color = #008080, text_size = size.tiny)
+
+    table.cell(info_table, 0, 9, 'Algo 8: Sentiment', text_color = #000000, text_size = size.tiny)
+    table.cell(info_table, 1, 9, str.tostring(math.round(sentiment_signal * 9, 1)), text_color = #800000, text_size = size.tiny)
+
+    table.cell(info_table, 0, 10, 'Algo 9: ML Pattern', text_color = #000000, text_size = size.tiny)
+    table.cell(info_table, 1, 10, str.tostring(math.round(ml_signal * 9, 1)), text_color = #000080, text_size = size.tiny)
+
+    table.cell(info_table, 0, 11, 'Composite Score', text_color = #000000, text_size = size.tiny)
+    table.cell(info_table, 1, 11, str.tostring(math.round(adjusted_signal * 100, 1)) + '%', text_color = adjusted_signal >= 0.5 ? #00ff00 : #ff0000, text_size = size.tiny)
+
+// ==================== ALERTS ====================
+// Strong signals
+alertcondition(signal_0_9 >= 7 and signal_0_9[1] < 7, title = 'Strong Long Signal', message = 'AMATS: Strong Long Signal Triggered - Score: {{plot_0}}')
+alertcondition(signal_0_9 <= 2 and signal_0_9[1] > 2, title = 'Strong Short Signal', message = 'AMATS: Strong Short Signal Triggered - Score: {{plot_0}}')
+
+// Signal changes
+alertcondition(signal_0_9 != signal_0_9[1], title = 'Signal Change', message = 'AMATS: Signal Changed from {{plot_0[1]}} to {{plot_0}}')
